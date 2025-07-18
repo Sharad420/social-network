@@ -1,0 +1,418 @@
+{% extends "network/layout.html" %}
+
+{% block body %}
+    <!-- Embed profile data as JSON -->
+     <!-- !!Can't actually paginate this because the data is embedded, if I want to paginate, I'll have to fetch the paginated JSON
+      from an API call, but since I want to try this embedding thing, I'm deciding NOT to paginate the profile page!! -->
+    <script id="profile-data" type="application/json">
+        {{ profile_data|safe }}
+    </script>
+
+    <!-- React will render into this div -->
+    <div id="profile-root"></div>
+
+
+    <script type="text/babel">
+        function ProfileApp() {
+            const isAuthenticated = document.body.dataset.authenticated === "true";
+            const username = document.body.dataset.username;
+
+            // Retrieve the data from the container which is strogin this Django variable
+            const container = document.getElementById("profile-data")
+            const profile = JSON.parse(document.getElementById("profile-data").textContent);
+
+            // Other hooks for functionality.
+            const [posts, setPosts] = React.useState(profile.posts)
+            const [followers, setFollowers] = React.useState(profile.followers)
+            const [following, setFollowing] = React.useState(profile.following)
+            const [isFollowing, setIsFollowing] = React.useState(profile.is_following)
+
+            // Define your helper functions
+            function handleFollow() {
+                // Make the route absolute
+                fetch(`/profile/${profile.username}/follow`, {
+                    method:"POST",
+                    headers: {
+                        "Content-Type":"application/json",
+                        "X-CSRFToken": window.CSRF_TOKEN 
+                    }
+                })
+                .then(async response => {
+                    const data = response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    setIsFollowing(data.is_following);
+                    setFollowers(data.followers);
+                })
+                .catch (error => {
+                    console.error("Trouble performing this action, please try again.", error.message);
+                })
+            }
+
+            function handleLike(postId) {
+                fetch(`/posts/${postId}/like`, {
+                    method:"POST",
+                    headers: {
+                        "Content-Type":"application/json",
+                        "X-CSRFToken": window.CSRF_TOKEN 
+                    }
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    // Set the posts state, where across all posts we're mapping the liked post id to the consequent state.
+                    setPosts(posts.map(post => 
+                        post.id === postId 
+                        // Remember the spread operator??
+                        ? { ...post, likes:data.likes, liked:data.liked}
+                        : post
+                    ))
+                })
+                .catch (error => {
+                    console.error("Trouble performing this action, please try again.", error.message);
+                })
+            }
+            
+            const [likers, setLikers] = React.useState([]);
+            const [showLikers, setShowLikers] = React.useState(false);
+            function handleShowLikers(postId) {
+                fetch(`/posts/${postId}/likers`)
+                .then(async response => {
+                    const data = await response.json()
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        console.error("Invalid likers data");
+                        return;
+                    }
+                    // Renders a new component and conditionally shows the modal.
+                    setLikers(data);
+                    setShowLikers(true);
+                })
+                .catch(error => {
+                    console.error("Trouble performing this action, please try again.", error.message);
+                })
+            }
+
+            const [followList, setFollowList] = React.useState([]);
+            const [showFollowList, setShowFollowList] = React.useState(false);
+            function handleShowFollow(profileUsername, type) {
+                if (!["following", "followers"].includes(type)) return;
+
+                fetch(`/${profileUsername}/${type}`)
+                .then(async response => {
+                    const data = await response.json()
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    setFollowList(data.users);
+                    setShowFollowList(true);
+                })
+                .catch(error => {
+                    console.error("Trouble performing this operation, please try again.", error.message);
+                })
+            }
+
+            const [commentData, setCommentData] = React.useState({}); // { postId: [comments] }
+            const [visibleComments, setVisibleComments] = React.useState(new Set()); // to track which comment sections are open
+            const [newComment, setNewComment] = React.useState("");
+            function handleComments(postId) {
+                // If already visible, hide it.
+                if (visibleComments.has(postId)) {
+                    const newSet = new Set(visibleComments);
+                    newSet.delete(postId);
+                    setVisibleComments(newSet);
+                    return;
+                }
+
+                fetch(`/posts/${postId}/comments`)
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error);
+                    }
+                    return data;
+                })
+                .then(data => {
+                    // Just takes the previous most recent state, spreads into a new object literal, and adds the new data and returns.
+                    setCommentData(prev => ({...prev, [postId]:data}));
+                    const newSet = new Set(visibleComments);
+                    newSet.add(postId);
+                    setVisibleComments(newSet);
+                })
+                .catch(error => {
+                    console.error("Trouble performing this operation", error.message)
+                })
+            }
+
+            function handleNewComment(postId) {
+                if (newComment.trim() === "") {
+                    alert("Comment cannot be empty");
+                    return;
+                }
+
+                fetch(`/posts/${postId}/comments`, {
+                    method:"POST", 
+                    headers: {
+                        "Content-Type":"application/json",
+                        "X-CSRFToken": window.CSRF_TOKEN 
+                    },
+                    body: JSON.stringify({content : newComment})
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error);
+                    }
+                    return data;
+                })
+                .then (validSubmission => {
+                    console.log("New comment submitted: ", newComment);
+                    setCommentData(prev => ({...prev, [postId]:[...(prev[postId] || []), validSubmission]}));
+                    // Set comments to 1 greater temporarily, when comments reload, it fetches this number anyway.
+                    setPosts(posts.map(p => 
+                        p.id === postId 
+                        ? {
+                            ...p,
+                            comments: p.comments + 1
+                        }
+                        : p
+                    ));
+                    setNewComment("");
+                })
+                // Just a double check to ensure we handle errors/empty posts gracefully.
+                .catch (error => {
+                    console.error("Error submitting new comment: ", error.message);
+                })
+            }
+
+            const [editingPostId, setEditingPostId] = React.useState(null);
+            const [editContent, setEditContent] = React.useState("");
+            function handleSaveEdit(postId) {
+                fetch(`/posts/${postId}/edit`, {
+                    method: "POST",
+                    headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": window.CSRF_TOKEN 
+                    },
+                    body: JSON.stringify({ content: editContent })
+                })
+                .then(async res => {
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error);
+                    return data;
+                })
+                .then(updatedPost => {
+                    setPosts(posts.map(p => p.id === postId ? updatedPost : p));
+                    setEditingPostId(null);
+                })
+                .catch(err => {
+                    alert("Error updating post: " + err.message);
+                });
+            }
+
+            function handleDeletePost(postId) {
+                // Add a fade-out class
+                const postElem = document.getElementById(`post-${postId}`);
+                if (postElem) {
+                    postElem.classList.add("fade-out-post");
+                    setTimeout(() => {
+                    fetch(`/posts/${postId}/delete`, {
+                        method: "DELETE",
+                        headers : {
+                            "X-CSRFToken": window.CSRF_TOKEN,
+                        }
+                    })
+                    .then(async res => {
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error);
+                        setPosts(posts.filter(p => p.id !== postId));
+                    })
+                    .catch(err => {
+                        console.error("Error deleting post:", err.message);
+                    });
+                    }, 500); // Match animation duration
+                }
+            }
+
+            return (
+                <div className="container mt-4">
+                    <h3>{profile.name}</h3>
+                    <p><b>@{profile.username}</b></p>
+
+                    <p>
+                        <span onClick={() => handleShowFollow(profile.username, "followers")} className="toggle">
+                            {followers} Followers
+                        </span>{" "}
+                        |{" "}
+                        <span onClick={() => handleShowFollow(profile.username, "following")} className="toggle">
+                            {following} Following
+                        </span>
+                    </p>
+                    {profile.username != username && (
+                        <button className={isFollowing ? "btn btn-light" : "btn btn-primary"} onClick={handleFollow}>{isFollowing ? "Unfollow" : "Follow"}</button>
+                    )}
+
+                    <hr />
+                    <h5>Posts</h5>
+                    {posts.map(post => (
+                        <div key={post.id} className="card mb-2" id={`post-${post.id}`}>
+                            <div className="card-body">
+                                <small>{post.timestamp}</small>
+                                <p>{post.content}</p>
+                                <p className="text-muted d-flex align-items-center">
+                                    <span 
+                                        className="like-toggle"
+                                        onClick={() => handleLike(post.id)}
+                                    >
+                                        {post.liked ? "❤️" : "💔"}
+                                    </span>
+                                    
+                                    <span
+                                        className="like-count"
+                                        onClick={() => handleShowLikers(post.id)}
+                                    >
+                                        {post.likes} likes 
+                                    </span>
+                                </p>
+                                {editingPostId === post.id ? (
+                                    <>
+                                    <textarea
+                                        className="form-control"
+                                        value={editContent}
+                                        onChange={e => setEditContent(e.target.value)}
+                                    />
+                                    <button
+                                        className="btn btn-sm btn-success mt-2"
+                                        onClick={() => handleSaveEdit(post.id)}
+                                    >
+                                        Save
+                                    </button>
+                                    <button
+                                        className="btn btn-sm btn-secondary mt-2 ms-2"
+                                        onClick={() => setEditingPostId(null)}
+                                    >
+                                        Cancel
+                                    </button>
+                                    </>
+                                ) : (
+                                    <>
+                                    {post.user === username && (
+                                        <div className="d-flex gap-2">
+                                        <button
+                                            className="btn btn-sm btn-outline-primary"
+                                            onClick={() => {
+                                            setEditingPostId(post.id);
+                                            setEditContent(post.content);
+                                            }}
+                                        >
+                                            Edit
+                                        </button>
+                                        <button
+                                            className="btn btn-sm btn-outline-danger"
+                                            onClick={() => handleDeletePost(post.id)}
+                                        >
+                                            Delete
+                                        </button>
+                                        </div>
+                                    )}
+                                    </>
+                                )}
+                            </div>
+                            <div className="card-footer">
+                                <span onClick={()=> handleComments(post.id)} className="toggle">
+                                    {post.comments} Comments 💭
+                                </span>
+                                {visibleComments.has(post.id) && (
+                                    <div className="mt-2">
+                                        {isAuthenticated && (
+                                            <div id="new-comment-form">
+                                                <input
+                                                    id="new-comment"
+                                                    className="form-control"
+                                                    type="text"
+                                                    placeholder="Type to comment..."
+                                                    value={newComment}
+                                                    onChange={(e) => setNewComment(e.target.value)}
+                                                />
+                                                <button 
+                                                    className="btn btn-primary mt-2"
+                                                    onClick={() => handleNewComment(post.id)}
+                                                >
+                                                    Comment
+                                                </button>
+                                            </div>
+                                        )}
+                                        <ul className="list-unstyled">
+                                            {(commentData[post.id] || []).map((comment, idx) => (
+                                                <li key={idx}><b>{comment.user}</b> {comment.content}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        </div>      
+                    ))}
+                    {showLikers && (
+                        <div className="modal-overlay">
+                            <div className="modal-content">
+                                <h5>Liked by</h5>
+                                <ul className="list-unstyled">
+                                    {likers.map((liker, index) => (
+                                        <li key={index}>
+                                            <a href={`/profile/${liker.username}`}>
+                                                {liker.username}
+                                            </a>
+                                        </li>
+                                    ))}
+                                </ul>
+                                <button className="btn btn-sm btn-secondary mt-2" onClick={() => setShowLikers(false)}>
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {showFollowList && (
+                        <div className="modal-overlay">
+                            <div className="modal-content">
+                                <h5>Users</h5>
+                                <ul className="list-unstyled">
+                                    {followList.map((followUser, index) => (
+                                        <li key={index}>
+                                            <a href={`/profile/${followUser.username}`}>
+                                                {followUser.username}
+                                            </a>
+                                        </li>
+                                    ))}
+                                </ul>
+                                <button className="btn btn-sm btn-secondary mt-2" onClick={() => setShowFollowList(false)}>
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+            // Use () instead of {} above for implicit return.
+        }
+
+        ReactDOM.render(<ProfileApp />, document.getElementById("profile-root"));
+    </script>
+{% endblock %}

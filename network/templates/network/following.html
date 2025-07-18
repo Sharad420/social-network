@@ -1,0 +1,300 @@
+{% extends "network/layout.html" %}
+
+{% block body %}
+    <script type="text/babel">
+        // Passing required props
+        function RecentPosts({ posts, isAuthenticated, username, setPosts }) {
+
+            function handleLike(postId) {
+                fetch(`/posts/${postId}/like`, {
+                    method:"POST",
+                    headers: {
+                        "Content-Type":"application/json",
+                        "X-CSRFToken": window.CSRF_TOKEN 
+                    }
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    // Set the posts state, where across all posts we're mapping the liked post id to the consequent state.
+                    setPosts(posts.map(post => 
+                        post.id === postId 
+                        // Remember the spread operator??
+                        ? { ...post, likes:data.likes, liked:data.liked}
+                        : post
+                    ))
+                })
+                .catch (error => {
+                    console.error("Trouble performing this action, please try again.", error.message);
+                })
+            }
+            
+            const [likers, setLikers] = React.useState([]);
+            const [showLikers, setShowLikers] = React.useState(false);
+            function handleShowLikers(postId) {
+                fetch(`/posts/${postId}/likers`)
+                .then(async response => {
+                    const data = await response.json()
+                    if (!response.ok) {
+                        throw new Error(data.error)
+                    }
+                    return data;
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        console.error("Invalid likers data");
+                        return;
+                    }
+                    // Renders a new component and conditionally shows the modal.
+                    setLikers(data);
+                    setShowLikers(true);
+                })
+                .catch(error => {
+                    console.error("Trouble performing this action, please try again.", error.message);
+                })
+            }
+
+            const [commentData, setCommentData] = React.useState({}); // { postId: [comments] }
+            const [visibleComments, setVisibleComments] = React.useState(new Set()); // to track which comment sections are open
+            const [newComment, setNewComment] = React.useState("");
+            function handleComments(postId) {
+                // If already visible, hide it.
+                if (visibleComments.has(postId)) {
+                    const newSet = new Set(visibleComments);
+                    newSet.delete(postId);
+                    setVisibleComments(newSet);
+                    return;
+                }
+
+                fetch(`/posts/${postId}/comments`)
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error);
+                    }
+                    return data;
+                })
+                .then(data => {
+                    // Just takes the previous most recent state, spreads into a new object literal, and adds the new data and returns.
+                    setCommentData(prev => ({...prev, [postId]:data}));
+                    const newSet = new Set(visibleComments);
+                    newSet.add(postId);
+                    setVisibleComments(newSet);
+                })
+                .catch(error => {
+                    console.error("Trouble performing this operation", error.message)
+                })
+            }
+
+            function handleNewComment(postId) {
+                if (newComment.trim() === "") {
+                    alert("Comment cannot be empty");
+                    return;
+                }
+
+                fetch(`/posts/${postId}/comments`, {
+                    method:"POST", 
+                    headers: {
+                        "Content-Type":"application/json",
+                        "X-CSRFToken": window.CSRF_TOKEN 
+                    },
+                    body: JSON.stringify({content : newComment})
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error);
+                    }
+                    return data;
+                })
+                .then (validSubmission => {
+                    console.log("New comment submitted: ", newComment);
+                    setCommentData(prev => ({...prev, [postId]:[...(prev[postId] || []), validSubmission]}));
+                    // Set comments to 1 greater temporarily, when comments reload, it fetches this number anyway.
+                    setPosts(posts.map(p => 
+                        p.id === postId 
+                        ? {
+                            ...p,
+                            comments: p.comments + 1
+                        }
+                        : p
+                    ));
+                    setNewComment("");
+                })
+                // Just a double check to ensure we handle errors/empty posts gracefully.
+                .catch (error => {
+                    console.error("Error submitting new comment: ", error.message);
+                })
+            }
+
+            return (
+                <div>
+                    {posts.map(post => (
+                        <div key={post.id} className="card mb-2">
+                            <div className="card-body">
+                                <h6><a href={`/profile/${post.user}`}><strong>{post.user}</strong></a> - <small>{post.timestamp}</small></h6>
+                                <p>{post.content}</p>
+                                <p className="text-muted d-flex align-items-center">
+                                    <span 
+                                        className="like-toggle"
+                                        onClick={() => handleLike(post.id)}
+                                    >
+                                        {post.liked ? "❤️" : "💔"}
+                                    </span>
+                                    
+                                    <span
+                                        className="like-count"
+                                        onClick={() => handleShowLikers(post.id)}
+                                    >
+                                        {post.likes} likes 
+                                    </span>
+                                </p>
+                            </div>
+                            <div className="card-footer">
+                                <span onClick={()=> handleComments(post.id)} className="toggle">
+                                    {post.comments} Comments 💭
+                                </span>
+                                {visibleComments.has(post.id) && (
+                                    <div className="mt-2">
+                                        {isAuthenticated && (
+                                            <div id="new-comment-form">
+                                                <input
+                                                    id="new-comment"
+                                                    className="form-control"
+                                                    type="text"
+                                                    placeholder="Type to comment..."
+                                                    value={newComment}
+                                                    onChange={(e) => setNewComment(e.target.value)}
+                                                />
+                                                <button 
+                                                    className="btn btn-primary mt-2"
+                                                    onClick={() => handleNewComment(post.id)}
+                                                >
+                                                    Comment
+                                                </button>
+                                            </div>
+                                        )}
+                                        <ul className="list-unstyled">
+                                            {(commentData[post.id] || []).map((comment, idx) => (
+                                                <li key={idx}><b>{comment.user}</b> {comment.content}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        </div>      
+                    ))}
+
+                    {showLikers && (
+                        <div className="modal-overlay">
+                            <div className="modal-content">
+                                <h5>Liked by</h5>
+                                <ul className="list-unstyled">
+                                    {likers.map((liker, index) => (
+                                        <li key={index}>
+                                            <a href={`/profile/${liker.username}`}>
+                                                {liker.username}
+                                            </a>
+                                        </li>
+                                    ))}
+                                </ul>
+                                <button className="btn btn-sm btn-secondary mt-2" onClick={() => setShowLikers(false)}>
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+
+        }
+
+        function App() {
+            // Get the authentication and username from the body data attributes.
+            const isAuthenticated = document.body.dataset.authenticated === "true";
+            const username = document.body.dataset.username;
+
+            // State to hold the new post content.
+            const [newPost, setNewPost] = React.useState("");
+            const [posts, setPosts] = React.useState([]);
+
+            // Pagination
+            const [currentPage, setCurrentPage] = React.useState(1);
+            const [hasNext, setHasNext] = React.useState(false);
+            const [hasPrevious, setHasPrevious] = React.useState(false);
+
+            function fetchPosts(page=1) {
+                fetch(`/posts/following?page=${page}`)
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error);
+                    }
+                    return data;
+                })
+                .then(data => {
+                    setPosts(data.posts);
+                    setHasNext(data.has_next);
+                    setHasPrevious(data.has_previous);
+                    setCurrentPage(data.current_page);
+                    
+                })
+                .catch(error => {
+                    console.error("Error fetching posts: ", error.message);
+                });
+            }
+
+            // Depends on nothing, and renders once the component mounts. Read up on useEffect for more.
+            // After pagination, depends on the current page hook.
+            React.useEffect(() => {
+                fetchPosts(currentPage);
+            }, [currentPage]);
+
+            return (
+                <div className="container mt-5" id="new-post-container">
+                    <h3>People you're following</h3>
+                    {!isAuthenticated && (
+                        <div className="alert alert-warning" role="alert">
+                            Login/Register to share your thoughts and connect with others!
+                        </div>
+                    )}
+                    {/* Always visible: recent posts */}
+                    <hr />
+                    <h5>Recent Posts</h5>
+                    <RecentPosts 
+                        posts={posts} 
+                        isAuthenticated={isAuthenticated}
+                        username={username}
+                        setPosts={setPosts}
+                    />
+                    <nav aria-label="Page navigation example" className="mt-4">
+                      <ul className="pagination justify-content-center">
+                        <li className={`page-item ${!hasPrevious ? "disabled" : ""}`}>
+                          <button className="page-link" onClick={() => setCurrentPage(currentPage - 1)} disabled={!hasPrevious}>
+                            Previous
+                          </button>
+                        </li>
+                        <li className="page-item disabled">
+                          <span className="page-link">
+                            Page {currentPage}
+                          </span>
+                        </li>
+                        <li className={`page-item ${!hasNext ? "disabled" : ""}`}>
+                          <button className="page-link" onClick={() => setCurrentPage(currentPage + 1)} disabled={!hasNext}>
+                            Next
+                          </button>
+                        </li>
+                      </ul>
+                    </nav>
+                </div>
+            );
+        }
+        ReactDOM.render(<App />, document.getElementsByClassName("body")[0]);
+    </script>
+    
+{% endblock %}

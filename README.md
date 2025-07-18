@@ -52,7 +52,7 @@ A full-stack social networking application built with **Django** and **React**, 
 4.	**Apply migrations and start the server:**
 
     ```python manage.py migrate
-        python manage.py runserver
+    python manage.py runserver
 
 
 License
